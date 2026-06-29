@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.venv/
+uv.lock
+
+# 上传文件（保留目录）
+uploads/*
+!uploads/.gitkeep
+
+# 环境配置
+.env
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/

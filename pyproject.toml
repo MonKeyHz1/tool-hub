@@ -1,0 +1,70 @@
+[project]
+name = "tool-hub"
+version = "0.1.0"
+description = "工具中心 - 集成多个业务工具的后端服务"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # Web 框架
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    # HTTP 客户端
+    "httpx>=0.27.0",
+    # Excel 解析
+    "openpyxl>=3.1.5",
+    # 数据校验
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    # 日志
+    "structlog>=24.0.0",
+    # 重试
+    "tenacity>=9.1.4",
+    # 文件上传
+    "python-multipart>=0.0.9",
+    # CORS
+    # fastapi 自带，无需额外依赖
+    "cryptography>=49.0.0",
+    "chardet>=7.4.3",
+    "pymysql",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+    "mypy>=1.10.0",
+    "ruff>=0.4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tool_hub"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
