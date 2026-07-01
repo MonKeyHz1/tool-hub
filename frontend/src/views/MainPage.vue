@@ -4,7 +4,7 @@
  */
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { fetchTools } from '../api'
+import { fetchTools, cleanupUploadFiles } from '../api'
 
 const router = useRouter()
 
@@ -17,6 +17,8 @@ interface ToolInfo {
 const tools = ref<ToolInfo[]>([])
 const loading = ref(true)
 const error = ref('')
+const cleanupLoading = ref(false)
+const cleanupMsg = ref('')
 
 onMounted(async () => {
   try {
@@ -32,6 +34,20 @@ onMounted(async () => {
 function goToTool(toolId: string) {
   router.push(`/tool/${toolId}`)
 }
+
+async function onCleanupFiles() {
+  if (!window.confirm('确认删除 uploads 目录下所有上传/生成的文件？')) return
+  cleanupLoading.value = true
+  cleanupMsg.value = ''
+  try {
+    const r = await cleanupUploadFiles()
+    cleanupMsg.value = r.message || '清理完成'
+  } catch (e: any) {
+    cleanupMsg.value = e.message || '清理失败'
+  } finally {
+    cleanupLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -39,6 +55,10 @@ function goToTool(toolId: string) {
     <header class="page-header">
       <h1>工具中心</h1>
       <p class="subtitle">集成多个业务工具，选择工具开始使用</p>
+      <button class="btn-cleanup" :disabled="cleanupLoading" @click="onCleanupFiles">
+        {{ cleanupLoading ? '清理中...' : '🗑 清理上传文件' }}
+      </button>
+      <span v-if="cleanupMsg" class="cleanup-msg">{{ cleanupMsg }}</span>
     </header>
 
     <div v-if="loading" class="status-msg">加载工具列表中...</div>
@@ -69,6 +89,33 @@ function goToTool(toolId: string) {
 .page-header {
   text-align: center;
   margin-bottom: 40px;
+}
+
+.btn-cleanup {
+  padding: 6px 14px;
+  border: 1px solid #ef9a9a;
+  border-radius: 4px;
+  background: #ffebee;
+  color: #c62828;
+  cursor: pointer;
+  font-size: 13px;
+  margin-top: 12px;
+}
+
+.btn-cleanup:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-cleanup:hover:not(:disabled) {
+  background: #ffcdd2;
+}
+
+.cleanup-msg {
+  display: block;
+  font-size: 12px;
+  color: #e65100;
+  margin-top: 6px;
 }
 
 .page-header h1 {

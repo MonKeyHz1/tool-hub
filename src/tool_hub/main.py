@@ -20,6 +20,7 @@ from .logging import setup_logging
 from .models import ExecuteRequest, FileUploadResult
 from .tools import registry  # 触发工具自动注册
 from .tools.temu_gateway.router import router as temu_gateway_router
+from .tools.encoding_converter.router import router as encoding_converter_router
 from .tools.pdd_order.router import router as pdd_order_router
 from .tools.push_weight.router import router as push_weight_router
 from .tools.financial_system.router import router as financial_system_router
@@ -52,6 +53,8 @@ app.include_router(pdd_order_router)
 app.include_router(push_weight_router)
 # 挂载财务系统路由
 app.include_router(financial_system_router)
+# 挂载编码转换路由
+app.include_router(encoding_converter_router)
 
 # 挂载静态文件目录（供编码转换等工具下载文件使用）
 app.mount("/files", StaticFiles(directory=str(settings.upload_path)), name="files")
@@ -176,6 +179,31 @@ async def save_tool_state(tool_id: str, data: dict[str, Any]) -> dict[str, str]:
 async def health_check() -> dict[str, str]:
     """健康检查接口。"""
     return {"status": "ok", "version": "0.1.0"}
+
+
+@app.post("/api/files/cleanup")
+async def cleanup_upload_files() -> dict[str, Any]:
+    """删除 uploads 目录下所有上传/生成的文件（保留 .gitkeep）。"""
+    upload_dir = settings.upload_path
+    deleted = 0
+    failed = []
+    for item in upload_dir.iterdir():
+        if item.name == ".gitkeep":
+            continue
+        try:
+            if item.is_file() or item.is_symlink():
+                item.unlink()
+            elif item.is_dir():
+                import shutil
+                shutil.rmtree(item)
+            deleted += 1
+        except Exception as e:
+            failed.append({"path": str(item), "error": str(e)})
+    return {
+        "success": len(failed) == 0,
+        "message": f"已删除 {deleted} 个文件/目录" + (f"，{len(failed)} 个失败" if failed else ""),
+        "data": {"deleted": deleted, "failed": failed},
+    }
 
 
 @app.post("/api/mip-customs/clear-state")

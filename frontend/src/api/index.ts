@@ -115,6 +115,18 @@ export async function temuGetExpressSheet(
   return data
 }
 
+/** Base64 转 PDF */
+export async function base64ToPdf(base64: string) {
+  const { data } = await api.post('/encoding-converter/base64-to-pdf', { base64 })
+  return data
+}
+
+/** 清理上传目录文件 */
+export async function cleanupUploadFiles() {
+  const { data } = await api.post('/files/cleanup')
+  return data
+}
+
 // ====================================================================
 // 工具状态持久化接口（公共基础功能）
 // ====================================================================
