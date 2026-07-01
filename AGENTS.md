@@ -9,8 +9,8 @@
 ## 启动
 
 ```powershell
-# 后端
-cd D:\work\AITest\tool-hub
+# 后端（注意：当前目录是 D:\work\AITest\tool-hub\tool-hub，外层目录已废弃）
+cd D:\work\AITest\tool-hub\tool-hub
 uv run python main.py            # http://localhost:8000
 
 # 前端
