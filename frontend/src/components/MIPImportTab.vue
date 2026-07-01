@@ -18,6 +18,13 @@ const selectedFile = ref<File | null>(null)
 const fileId = ref('')
 const uploading = ref(false)
 
+// --- 高级选项 ---
+const advancedOpen = ref(false)
+const concurrency = ref(3)
+const requestTimeout = ref(30)
+const maxRetryAttempts = ref(3)
+const retryWaitMin = ref(1.0)
+const retryWaitMax = ref(10.0)
 // --- 执行 ---
 const tokenEnv = ref('test')
 const executing = ref(false)
@@ -109,7 +116,14 @@ async function onExecute() {
   taskMessage.value = ''
 
   try {
-    const r = await executeTool(props.toolId, { token_env: tokenEnv.value }, fileId.value)
+    const r = await executeTool(props.toolId, { 
+      token_env: tokenEnv.value,
+      concurrency: concurrency.value,
+      request_timeout: requestTimeout.value,
+      max_retry_attempts: maxRetryAttempts.value,
+      retry_wait_min: retryWaitMin.value,
+      retry_wait_max: retryWaitMax.value,
+    }, fileId.value)
     if (r.success && r.data?.task_id) {
       taskId.value = r.data.task_id
       await pollTaskStatus(taskId.value)
@@ -210,6 +224,38 @@ async function onRetryAll() {
         {{ executing ? '执行中...' : '执行' }}
       </button>
       <button class="btn btn-clear" @click="$emit('clearState')">清状态</button>
+      <button class="btn btn-adv" @click="advancedOpen = !advancedOpen">
+        {{ advancedOpen ? '隐藏高级' : '高级选项' }}
+      </button>
+    </div>
+
+    <!-- 高级选项 -->
+    <div v-if="advancedOpen" class="advanced-panel">
+      <div class="adv-row">
+        <label>并发数</label>
+        <input v-model.number="concurrency" type="number" min="1" max="20" class="adv-input" />
+        <span class="adv-hint">同时请求数，默认 3</span>
+      </div>
+      <div class="adv-row">
+        <label>请求超时(秒)</label>
+        <input v-model.number="requestTimeout" type="number" min="5" max="120" class="adv-input" />
+        <span class="adv-hint">单个请求超时，默认 30</span>
+      </div>
+      <div class="adv-row">
+        <label>重试次数</label>
+        <input v-model.number="maxRetryAttempts" type="number" min="0" max="10" class="adv-input" />
+        <span class="adv-hint">单条失败重试次数，默认 3</span>
+      </div>
+      <div class="adv-row">
+        <label>重试最小等待(秒)</label>
+        <input v-model.number="retryWaitMin" type="number" min="0.1" step="0.1" class="adv-input" />
+        <span class="adv-hint">默认 1.0</span>
+      </div>
+      <div class="adv-row">
+        <label>重试最大等待(秒)</label>
+        <input v-model.number="retryWaitMax" type="number" min="0.1" step="0.1" class="adv-input" />
+        <span class="adv-hint">默认 10.0</span>
+      </div>
     </div>
 
     <div v-if="execError" class="err">{{ execError }}</div>
@@ -299,6 +345,12 @@ async function onRetryAll() {
 .btn-exec { background: #4caf50; color: #fff; }
 .btn-clear { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
 .btn-clear:hover { background: #ffcdd2; }
+.btn-adv { background: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; }
+.advanced-panel { padding: 12px; background: #f5f5f5; border-radius: 4px; margin-bottom: 10px; }
+.adv-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.adv-row label { min-width: 110px; font-size: 12px; color: #555; }
+.adv-input { width: 70px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; }
+.adv-hint { font-size: 11px; color: #888; }
 .btn-retry, .btn-retry-sm { background: #ff9800; color: #fff; }
 .btn-results { background: #9c27b0; color: #fff; }
 .ok { color: #2e7d32; font-size: 13px; }

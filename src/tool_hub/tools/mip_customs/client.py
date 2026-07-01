@@ -31,16 +31,17 @@ class MIPAsyncClient:
     支持自动认证和错误处理。
     """
 
-    def __init__(self, config: MIPConfig | None = None) -> None:
+    def __init__(self, config: MIPConfig | None = None, request_timeout: float | None = None) -> None:
         """初始化异步客户端。
 
         Args:
             config: MIP API 配置，不传则从环境变量加载。
+            request_timeout: 单个请求超时（秒），覆盖 config.timeout。
         """
         self.config = config or MIPConfig()
         self._client = httpx.AsyncClient(
             base_url=self.config.base_url,
-            timeout=self.config.timeout,
+            timeout=request_timeout if request_timeout is not None else self.config.timeout,
         )
         self._logger = logger.bind(client="MIPAsyncClient")
 

@@ -442,8 +442,8 @@ class ExcelImporter:
     负责从 Excel 文件读取数据、构建模型、并发提交到 MIP API。
     """
 
-    # 最大并发数
-    _MAX_CONCURRENCY = 20
+    # 默认最大并发数
+    _DEFAULT_CONCURRENCY = 3
 
     def __init__(
         self,
@@ -454,6 +454,10 @@ class ExcelImporter:
         progress_callback: ProgressCallback | None = None,
         task_manager: ImportTaskManager | None = None,
         task_id: str = "",
+        concurrency: int = _DEFAULT_CONCURRENCY,
+        max_retry_attempts: int = 3,
+        retry_wait_min: float = 1.0,
+        retry_wait_max: float = 10.0,
     ) -> None:
         """初始化导入器。
 
@@ -465,6 +469,10 @@ class ExcelImporter:
             progress_callback: 进度回调函数 (progress, total, message)。
             task_manager: 任务管理器（用于检查取消状态）。
             task_id: 当前任务 ID。
+            concurrency: 最大并发数（默认 3）。
+            max_retry_attempts: 单条请求最大重试次数。
+            retry_wait_min: 重试等待最小秒数。
+            retry_wait_max: 重试等待最大秒数。
         """
         self.client = client
         self.defaults = defaults or ImportDefaults()
@@ -473,6 +481,10 @@ class ExcelImporter:
         self.progress_callback = progress_callback or _noop_progress
         self.task_manager = task_manager
         self.task_id = task_id
+        self.concurrency = max(1, min(concurrency, 20))
+        self.max_retry_attempts = max(0, max_retry_attempts)
+        self.retry_wait_min = max(0.1, retry_wait_min)
+        self.retry_wait_max = max(self.retry_wait_min, retry_wait_max)
         self._logger = logger.bind(component="ExcelImporter")
 
     async def _call_api_with_retry(self, item: CustomsItem) -> None:
@@ -493,8 +505,8 @@ class ExcelImporter:
         if self.use_create_api:
             @retry(
                 retry=retry_if_exception(_should_retry),
-                stop=stop_after_attempt(3),
-                wait=wait_exponential(multiplier=1, min=1, max=10),
+                stop=stop_after_attempt(self.max_retry_attempts),
+                wait=wait_exponential(multiplier=1, min=self.retry_wait_min, max=self.retry_wait_max),
                 reraise=True,
             )
             async def _call() -> None:
@@ -504,8 +516,8 @@ class ExcelImporter:
         else:
             @retry(
                 retry=retry_if_exception(_should_retry),
-                stop=stop_after_attempt(3),
-                wait=wait_exponential(multiplier=1, min=1, max=10),
+                stop=stop_after_attempt(self.max_retry_attempts),
+                wait=wait_exponential(multiplier=1, min=self.retry_wait_min, max=self.retry_wait_max),
                 reraise=True,
             )
             async def _call() -> None:
@@ -681,7 +693,7 @@ class ExcelImporter:
             await self.progress_callback(0, total_groups, "开始导入...")
 
             # 并发处理
-            semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
+            semaphore = asyncio.Semaphore(self.concurrency)
             cancel_event = asyncio.Event()
 
             completed = 0

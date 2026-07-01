@@ -160,7 +160,7 @@ class MIPCustomsTool(BaseTool):
             else:
                 config.access_token = config.access_token_test or config.access_token
 
-            async with MIPAsyncClient(config) as client:
+            async with MIPAsyncClient(config, request_timeout=params.get("request_timeout")) as client:
                 # 4. 创建导入器并执行
                 importer = ExcelImporter(
                     client=client,
@@ -170,6 +170,10 @@ class MIPCustomsTool(BaseTool):
                     progress_callback=manager.make_progress_callback(task_id),
                     task_manager=manager,
                     task_id=task_id,
+                    concurrency=int(params.get("concurrency", 3)),
+                    max_retry_attempts=int(params.get("max_retry_attempts", 3)),
+                    retry_wait_min=float(params.get("retry_wait_min", 1.0)),
+                    retry_wait_max=float(params.get("retry_wait_max", 10.0)),
                 )
 
                 batch = await importer.import_file(file_path)
