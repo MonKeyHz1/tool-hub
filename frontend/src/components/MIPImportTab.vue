@@ -2,7 +2,7 @@
 /**
  * MIPImportTab - MIP 导入 Tab（上传/执行/结果/重试）。
  */
-import { onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { uploadFile, executeTool, mipFetchResults, mipRetryFailed, mipGetTaskStatus } from '../api'
 
 const props = defineProps<{
@@ -28,6 +28,10 @@ const execError = ref('')
 const rowResults = ref<any[]>([])
 const resultsLoading = ref(false)
 const retrying = ref<Set<string>>(new Set())
+const failedNumbersText = ref('')
+const copied = ref(false)
+
+const failedNumbers = computed(() => rowResults.value.filter(r => r.status !== 'success').map(r => r.tracking_number))
 
 function onFileChange(e: Event) {
   const t = (e.target as HTMLInputElement)
@@ -127,10 +131,26 @@ async function onFetchResults() {
   try {
     const r = await mipFetchResults()
     rowResults.value = r.data || []
+    failedNumbersText.value = failedNumbers.value.join('\n')
   } catch (e: any) {
     execError.value = e.message || '获取结果失败'
   } finally {
     resultsLoading.value = false
+  }
+}
+
+async function onCopyFailedNumbers() {
+  if (!failedNumbers.value.length) return
+  try {
+    await navigator.clipboard.writeText(failedNumbersText.value)
+    copied.value = true
+    setTimeout(() => copied.value = false, 1500)
+  } catch {
+    // fallback: select textarea
+    const el = document.getElementById(`failed-numbers-${props.toolId}`) as HTMLTextAreaElement | null
+    if (el) {
+      el.select()
+    }
   }
 }
 
@@ -220,6 +240,23 @@ async function onRetryAll() {
 
     <!-- 逐行结果 -->
     <div v-if="rowResults.length" class="table-wrap">
+      <div class="failed-summary" v-if="failedNumbers.length">
+        <div class="failed-title">
+          失败/重复单号（共 {{ failedNumbers.length }} 个）
+          <button class="btn btn-copy" @click="onCopyFailedNumbers" :disabled="copied">
+            {{ copied ? '已复制' : '复制全部' }}
+          </button>
+        </div>
+        <textarea
+          :id="`failed-numbers-${toolId}`"
+          class="failed-textarea"
+          readonly
+          rows="4"
+          v-model="failedNumbersText"
+          @click="($event.target as HTMLTextAreaElement).select()"
+        ></textarea>
+      </div>
+
       <table>
         <thead>
           <tr><th>运单号</th><th>状态</th><th>失败原因</th><th>操作</th></tr>
@@ -272,6 +309,10 @@ async function onRetryAll() {
 .progress-bar { width: 100%; height: 10px; background: #e0e0e0; border-radius: 5px; overflow: hidden; }
 .progress-fill { height: 100%; background: #1976d2; transition: width 0.3s ease; }
 .progress-text { font-size: 12px; color: #555; margin-top: 4px; }
+.failed-summary { margin-bottom: 12px; padding: 10px 12px; background: #fff3e0; border: 1px solid #ffcc80; border-radius: 4px; }
+.failed-title { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #e65100; margin-bottom: 6px; }
+.failed-textarea { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; resize: vertical; }
+.btn-copy { background: #ff9800; color: #fff; }
 .table-wrap { margin-top: 12px; max-height: 500px; overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th, td { padding: 5px 8px; border-bottom: 1px solid #e0e0e0; text-align: left; }
