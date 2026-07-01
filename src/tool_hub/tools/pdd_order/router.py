@@ -827,8 +827,8 @@ async def pdd_batch(data: dict[str, Any]):
                 if step_interval > 0:
                     async for m in sse("progress", {"msg": f"[拆包] 等待 {step_interval}s 后开始..."}): yield m
                     await asyncio.sleep(step_interval)
-                async for m in sse("step",{"step":"拆包","key":"unpack","status":"loading","msg":"执行中..."}): yield m
                 home = [o for o in success_orders if o.get("delivery_type")=="homeDelivery"]
+                async for m in sse("step",{"step":"拆包","key":"unpack","status":"loading","msg":"执行中..."}): yield m
                 ok=0; errs=[]
                 for o in home:
                     ub={"orderCode":o["order_code"],"buyerCode":o["buyer_code"],"providerCode":"KIMIGO_MN","consoWarehouseCode":"KIMIGO","consoType":"DIRECT_MAIL_DIRECT_ROAD","deliveryType":o.get("delivery_type","homeDelivery"),"mailDetails":[{"expressCode":"SF","mailNo":o["mail_no"]}],"receiverDetail":order_body.get("buyerDetail",{})}
@@ -836,9 +836,9 @@ async def pdd_batch(data: dict[str, Any]):
                     o["unpack"]=r2.get("success")
                     if o["unpack"]: ok+=1
                     else: errs.append({"mail_no":o["mail_no"],"body":ub})
-                st="done" if ok else "fail"
-                async for m in sse("step",{"step":"拆包","key":"unpack","status":st,"msg":f"{ok}/{len(success_orders)}","errors":errs if errs else None}): yield m
-                if not ok:
+                st="done" if (ok == len(home)) else "fail"
+                async for m in sse("step",{"step":"拆包","key":"unpack","status":st,"msg":f"{ok}/{len(home)}跳过{len(success_orders)-len(home)}自提","errors":errs if errs else None}): yield m
+                if not ok and home:
                     async for m in sse("error",{"message":"拆包全部失败","errors":errs}): yield m
                     return
                 await asyncio.sleep(2)
