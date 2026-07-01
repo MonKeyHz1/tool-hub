@@ -92,7 +92,7 @@ const bagLoading = ref(false), bagResult = ref<any>(null), bagError = ref('')
 const vehicleBagNos = ref(''), vehicleLoading = ref(false), vehicleResult = ref<any>(null), vehicleError = ref('')
 const dispatchLoading = ref(false), dispatchResult = ref<any>(null)
 
-const batchOrderCount = ref('3'), batchPickupCount = ref('0'), batchBagSize = ref('3'), batchBinCode = ref('A1-1-2')
+const batchOrderCount = ref('3'), batchPickupCount = ref('0'), batchBagSize = ref('3'), batchBinCode = ref('A1-1-2'), batchStepInterval = ref('0')
 const batchSteps = ref<string[]>(['inbound','weigh','shelf','unpack','outbound','bag','vehicle','dispatch'])
 const batchLoading = ref(false), batchProgress = ref<string[]>([]), batchStepStates = ref<Record<string,string>>({})
 const batchOrders = ref<any[]>([]), batchResult = ref<any>(null), batchError = ref('')
@@ -142,6 +142,7 @@ async function loadState(){
   if(s.outbound_logistics_order_code)outboundOrderCode.value=s.outbound_logistics_order_code
   if(s.batch_bin_code)batchBinCode.value=s.batch_bin_code; if(s.batch_home_count)batchOrderCount.value=s.batch_home_count
   if(s.batch_pickup_count)batchPickupCount.value=s.batch_pickup_count; if(s.batch_bag_size)batchBagSize.value=s.batch_bag_size
+  if(s.batch_step_interval)batchStepInterval.value=s.batch_step_interval
   }catch{}
 }
 
@@ -240,7 +241,7 @@ async function onBatch(){
   try{
     const body=JSON.parse(orderJson.value)
     const resp=await fetch('/api/pdd-order/batch',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({home_count:+batchOrderCount.value,pickup_count:+batchPickupCount.value,bag_group_size:+batchBagSize.value,steps:batchSteps.value,delivery_type:deliveryType.value,token:tmsToken.value,warehouse_code:batchWarehouseCode.value,bin_code:batchBinCode.value,route_ids:[...batchRouteIds.value,...(batchFailNodeId.value?[batchFailNodeId.value]:[])],order_body:JSON.parse(orderJson.value)})})
+      body:JSON.stringify({home_count:+batchOrderCount.value,pickup_count:+batchPickupCount.value,bag_group_size:+batchBagSize.value,steps:batchSteps.value,delivery_type:deliveryType.value,token:tmsToken.value,warehouse_code:batchWarehouseCode.value,bin_code:batchBinCode.value,step_interval:parseFloat(batchStepInterval.value||'0'),route_ids:[...batchRouteIds.value,...(batchFailNodeId.value?[batchFailNodeId.value]:[])],order_body:JSON.parse(orderJson.value)})})
     const reader=resp.body!.getReader();const decoder=new TextDecoder();let buf=''
     while(true){const{value,done}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true})
       const parts=buf.split('\n\n');buf=parts.pop()||''
@@ -248,7 +249,7 @@ async function onBatch(){
         for(const l of lines){if(l.startsWith('event:'))event=l.slice(6).trim();else if(l.startsWith('data:'))data=l.slice(5).trim()}
         if(!event||!data)continue
         try{const d=JSON.parse(data)
-          if(event==='step'){batchStepStates.value[d.step]=d.status;batchProgress.value.push(`${d.status==='done'?'✓':d.status==='fail'?'X':'O'} ${d.step}: ${d.msg}`);if(d.errors)for(const e of d.errors)batchProgress.value.push(` ${e.mail_no}: ${JSON.stringify(e.body)}`)}
+          if(event==='step'){batchStepStates.value[d.key||d.step]=d.status;batchProgress.value.push(`${d.status==='done'?'✓':d.status==='fail'?'X':'O'} ${d.step}: ${d.msg}`);if(d.errors)for(const e of d.errors)batchProgress.value.push(` ${e.mail_no}: ${JSON.stringify(e.body)}`)}}
           else if(event==='progress'){
             if(d.msg){ batchProgress.value.push(d.msg) }
             else if(d.bag_no){ batchProgress.value.push(`包${d.idx}/${d.total}: ${d.bag_no} (${d.count||0}单)`) }
@@ -368,6 +369,7 @@ async function onBatch(){
     <!-- batch -->
     <div v-show="activeTab==='batch'" class="pnl"><h3>批量</h3>
       <div class="fr"><label>上门</label><input v-model="batchOrderCount" type="number" min="0" class="in s"/><label>自提</label><input v-model="batchPickupCount" type="number" min="0" class="in s"/><label>单/包</label><input v-model="batchBagSize" type="number" min="1" class="in s"/><label>货架号</label><input v-model="batchBinCode" type="text" class="in s"/></div>
+      <div class="fr"><label>步骤间隔(秒)</label><input v-model="batchStepInterval" type="number" min="0" step="0.5" class="in s"/><span class="ds" style="line-height:32px">每个大步骤开始前等待秒数</span></div>
       <div class="fr bs"><label>步骤</label>
         <label class="ac"><input type="checkbox" :checked="batchSteps.includes('inbound')" @change="toggleBatchStep('inbound')"/>入库</label>
         <label class="ac"><input type="checkbox" :checked="batchSteps.includes('weigh')" @change="toggleBatchStep('weigh')"/>称重</label>

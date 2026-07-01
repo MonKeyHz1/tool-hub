@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -129,16 +129,16 @@ async def upload_file(file: UploadFile = File(...)) -> FileUploadResult:
 
 
 @app.post("/api/tools/execute")
-async def execute_tool(request: ExecuteRequest) -> dict[str, Any]:
+async def execute_tool(request: Request, exec_request: ExecuteRequest) -> dict[str, Any]:
     """执行指定的工具。"""
-    tool = registry.get_tool(request.tool_id)
+    tool = registry.get_tool(exec_request.tool_id)
     if tool is None:
-        raise HTTPException(status_code=404, detail=f"工具 '{request.tool_id}' 不存在")
+        raise HTTPException(status_code=404, detail=f"工具 '{exec_request.tool_id}' 不存在")
 
     file_path: Path | None = None
-    if request.file_id:
+    if exec_request.file_id:
         upload_dir = settings.upload_path
-        candidates = list(upload_dir.glob(f"{request.file_id}.*"))
+        candidates = list(upload_dir.glob(f"{exec_request.file_id}.*"))
         if candidates:
             file_path = candidates[0]
         else:
@@ -146,11 +146,12 @@ async def execute_tool(request: ExecuteRequest) -> dict[str, Any]:
                 status_code=400,
                 content={
                     "success": False,
-                    "message": f"文件 ID '{request.file_id}' 对应的文件不存在",
+                    "message": f"文件 ID '{exec_request.file_id}' 对应的文件不存在",
                 },
             )
 
-    result = await tool.execute(params=request.params, file_path=file_path)
+    request_host = request.headers.get("host", "")
+    result = await tool.execute(params=exec_request.params, file_path=file_path, request_host=request_host)
     return result.model_dump()
 
 
@@ -234,10 +235,12 @@ async def download_mip_template():
     wb.save(output)
     output.seek(0)
 
+    filename = "MIP_导入模板.xlsx"
+    encoded = filename.encode("utf-8").hex()
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=MIP_导入模板.xlsx"},
+        headers={"Content-Disposition": f"attachment; filename=MIP_template.xlsx; filename*=UTF-8''{filename}"},
     )
 
 

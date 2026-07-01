@@ -80,12 +80,14 @@ class MIPCustomsTool(BaseTool):
         self,
         params: dict[str, Any],
         file_path: Path | None = None,
+        request_host: str = "",
     ) -> ToolResult:
         """执行 Excel 批量导入。
 
         Args:
             params: 前端传入的参数（mode, sender_*, price 等）。
             file_path: 上传的 Excel 文件路径。
+            request_host: 请求 Host，用于生成下载链接（当前未使用）。
 
         Returns:
             ToolResult 包含导入结果、成功/失败数量和错误详情。

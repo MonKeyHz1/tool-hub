@@ -12,6 +12,7 @@ import structlog
 from fastapi import APIRouter
 
 from ...tool_state import save_state, get_state
+from ..common_errors import error_response
 from .config import FinancialSystemConfig
 
 logger = structlog.get_logger(component="FinancialSystemAPI")
@@ -59,7 +60,7 @@ async def login(data: dict[str, Any]) -> dict[str, Any]:
             return {"success": False, "message": f"登录失败: {data_rsp.get('message', rsp.text)}"}
     except Exception as e:
         logger.error("financial_login_error", error=str(e))
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.post("/call")
@@ -105,7 +106,7 @@ async def call_api(data: dict[str, Any]) -> dict[str, Any]:
             return {"success": True, "data": result}
     except Exception as e:
         logger.error("financial_call_error", api_path=api_path, error=str(e))
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.get("/saved-body")

@@ -48,6 +48,7 @@ class TemuGatewayTool(BaseTool):
         self,
         params: dict[str, Any],
         file_path: Path | None = None,
+        request_host: str = "",
     ) -> ToolResult:
         """Temu Gateway 工具不需要通用执行入口，
         实际操作通过专属 API 路由完成。

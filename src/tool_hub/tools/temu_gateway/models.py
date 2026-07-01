@@ -21,6 +21,7 @@ class LoginResponse(BaseModel):
     expires_in: int = Field(default=0, description="password 有效期（秒）")
     app_id: str = Field(default="", description="应用 ID")
     message: str = Field(default="", description="提示消息")
+    error_code: str = Field(default="", description="统一错误码（失败时）")
     get_auth: dict[str, str] = Field(default_factory=dict, description="GET 请求鉴权头示例")
     post_auth: dict[str, str] = Field(default_factory=dict, description="POST 请求鉴权头示例")
 

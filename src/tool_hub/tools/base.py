@@ -43,12 +43,14 @@ class BaseTool(ABC):
         self,
         params: dict[str, Any],
         file_path: Path | None = None,
+        request_host: str = "",
     ) -> ToolResult:
         """执行工具。
 
         Args:
             params: 执行参数（键值对）。
             file_path: 上传的文件路径（如果需要文件输入）。
+            request_host: 请求 Host，用于生成下载链接等场景。
 
         Returns:
             ToolResult 包含执行结果、成功/失败状态、错误信息等。

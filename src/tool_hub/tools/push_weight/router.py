@@ -14,6 +14,7 @@ from fastapi import APIRouter
 from pymysql.cursors import DictCursor
 
 from ...tool_state import save_state
+from ..common_errors import error_response
 from .config import PushWeightConfig
 
 logger = structlog.get_logger(component="PushWeightAPI")
@@ -72,7 +73,7 @@ async def query_numbers(data: dict[str, Any]) -> dict[str, Any]:
         conn = _get_db_conn(config)
         cursor = conn.cursor()
     except Exception as e:
-        return {"success": False, "message": f"数据库连接失败: {e}"}
+        return {**error_response(e), "message": f"数据库连接失败: {e}"}
 
     try:
         # 1. 查询 customer_order 获取尾程单号（优先按 tracking_number 查）
@@ -119,7 +120,7 @@ async def query_numbers(data: dict[str, Any]) -> dict[str, Any]:
         }
     except Exception as e:
         logger.error("push_weight_query_error", error=str(e))
-        return {"success": False, "message": str(e)}
+        return error_response(e)
     finally:
         cursor.close()
         conn.close()
@@ -144,49 +145,77 @@ async def push_numbers(data: dict[str, Any]) -> dict[str, Any]:
         return {"success": False, "message": "无有效单号"}
 
     config = PushWeightConfig()
+    logger.info("push_weight_push_start", total=len(numbers), tms_host=config.tms_host, tms_user=config.tms_user)
     if not config.tms_host or not config.tms_user:
+        logger.error("push_weight_config_missing")
         return {"success": False, "message": "TMS 未配置，请检查 .env"}
 
     # 登录 TMS
     try:
         async with httpx.AsyncClient(timeout=config.timeout) as client:
+            login_url = f"{config.tms_host}/api/Login/NewLogin"
+            logger.info("push_weight_tms_login_request", url=login_url, job_number=config.tms_user)
             login_rsp = await client.post(
-                f"{config.tms_host}/api/Login/NewLogin",
+                login_url,
                 json={"jobNumber": config.tms_user, "password": config.tms_password},
                 headers={"Content-Type": "application/json"},
             )
+            logger.info("push_weight_tms_login_response", status_code=login_rsp.status_code, text=login_rsp.text[:500])
             login_data = login_rsp.json()
             if not login_data.get("state") or not login_data.get("data"):
+                logger.error("push_weight_tms_login_failed", response=login_data)
                 return {"success": False, "message": f"TMS 登录失败: {login_data}"}
             token = login_data["data"]
-            logger.info("push_weight_tms_login_success")
+            logger.info("push_weight_tms_login_success", token_prefix=token[:20])
 
             headers = {"Authorization": f"Bearer {token}"}
             success_list = []
             failed_list = []
 
             for i, num in enumerate(numbers):
+                push_url = f"{config.tms_host}/demo/pushPddOrderCrossLine"
+                logger.info("push_weight_push_one", index=i + 1, total=len(numbers), number=num, url=push_url)
                 try:
                     rsp = await client.get(
-                        f"{config.tms_host}/demo/pushPddOrderCrossLine",
+                        push_url,
                         params={"kyInstoreNumber": num},
                         headers=headers,
                     )
-                    body = rsp.json() if rsp.text else {}
+                    body_text = rsp.text
+                    body = rsp.json() if body_text else {}
                     code = body.get("code") if isinstance(body, dict) else None
+                    logger.info(
+                        "push_weight_push_one_response",
+                        index=i + 1,
+                        number=num,
+                        status_code=rsp.status_code,
+                        code=code,
+                        state=body.get("state") if isinstance(body, dict) else None,
+                        body=str(body)[:500],
+                    )
 
                     if code in (200, 0) or body.get("state"):
                         success_list.append({"number": num, "result": body})
+                        logger.info("push_weight_push_one_success", index=i + 1, number=num)
                     else:
                         failed_list.append({"number": num, "result": body})
+                        logger.warning("push_weight_push_one_failed", index=i + 1, number=num, result=body)
                 except Exception as e:
-                    failed_list.append({"number": num, "error": str(e)})
+                    err = error_response(e)
+                    logger.error("push_weight_push_one_error", index=i + 1, number=num, error_code=err.get("error_code"), error=err.get("message"))
+                    failed_list.append({"number": num, "error": err.get("message", str(e)), "error_code": err.get("error_code")})
 
                 # 间隔
                 if i < len(numbers) - 1:
                     import asyncio
                     await asyncio.sleep(config.push_interval)
 
+        logger.info(
+            "push_weight_push_complete",
+            total=len(numbers),
+            success_count=len(success_list),
+            failed_count=len(failed_list),
+        )
         return {
             "success": len(failed_list) == 0,
             "total": len(numbers),
@@ -197,4 +226,4 @@ async def push_numbers(data: dict[str, Any]) -> dict[str, Any]:
         }
     except Exception as e:
         logger.error("push_weight_push_error", error=str(e))
-        return {"success": False, "message": str(e)}
+        return error_response(e)

@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from ...tool_state import save_state
+from ..common_errors import error_response
 from .client import TemuGatewayClient
 from .crypto_utils import generate_sign
 from .models import ExpressSheetRequest, LoginRequest, LoginResponse, OrderRequest
@@ -87,6 +88,7 @@ async def temu_login(request: LoginRequest) -> dict[str, Any]:
         return LoginResponse(
             success=False,
             message=str(e),
+            error_code=error_response(e).get("error_code", "UNKNOWN_ERROR"),
         ).model_dump()
 
 
@@ -134,7 +136,7 @@ async def temu_place_order(request: OrderRequest) -> dict[str, Any]:
         }
     except Exception as e:
         logger.error("temu_place_order_error", error=str(e))
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 def _resolve_placeholders(obj: Any) -> Any:
@@ -209,7 +211,7 @@ async def temu_express_sheet(request: ExpressSheetRequest) -> dict[str, Any]:
         }
     except Exception as e:
         logger.error("temu_express_sheet_error", error=str(e))
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.get("/download/{filename}")

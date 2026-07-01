@@ -1,4 +1,4 @@
-﻿"""PDD 下单 + TMS 流程路由。"""
+"""PDD 下单 + TMS 流程路由。"""
 
 import json
 from typing import Any
@@ -8,6 +8,7 @@ import structlog
 from fastapi import APIRouter
 
 from ...tool_state import save_state, get_state
+from ..common_errors import error_response
 from .client import PDDOrderClient
 from .config import PDDOrderConfig
 from .field_generator import generate_dynamic_fields
@@ -116,7 +117,7 @@ async def pdd_create_order(request: PDDOrderRequest) -> dict[str, Any]:
         }
     except Exception as e:
         logger.error("pdd_create_order_error", error=str(e))
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 # ================================================================
@@ -151,7 +152,7 @@ async def pdd_tms_login(data: dict[str, Any]) -> dict[str, Any]:
                 return {"success": True, "token": token}
             return {"success": False, "message": f"登录失败: {data_rsp}"}
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.post("/inbound")
@@ -185,7 +186,7 @@ async def pdd_inbound(data: dict[str, Any]) -> dict[str, Any]:
             return _step_result(tracking_number, "inbound",
                 result.get("state", False) or result.get("code") == 200, result)
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.post("/shelf")
@@ -214,7 +215,7 @@ async def pdd_shelf(data: dict[str, Any]) -> dict[str, Any]:
             return _step_result(tracking_number, "shelf",
                 result.get("state", False) or result.get("code") == 200, result)
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.post("/auto-weigh")
@@ -310,7 +311,7 @@ async def _tms_post_raw(
             success = result.get("state", False) or result.get("code") == 200
             return {"success": success, "data": result}
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.post("/unpack")
@@ -470,7 +471,7 @@ async def pdd_bag(data: dict[str, Any]) -> dict[str, Any]:
             return {"success": True, "data": {"bag_id": bag_id, "bag_no": bag_no,
                     "combined_nos": combined_nos, "create_bag": bag_data, "scan": scan_results}}
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.post("/vehicle")
@@ -533,7 +534,7 @@ async def pdd_vehicle(data: dict[str, Any]) -> dict[str, Any]:
             return {"success": True, "data": {"plate": plate, "vehicle_id": vehicle_id,
                     "create_vehicle": vehicle_data, "attach_bags": send_data}}
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.post("/dispatch")
@@ -597,6 +598,19 @@ ROUTE_ORDER = {
     175:12, # 客户拒签
 }
 
+# 步骤中文名 -> 英文 key（批量流程用）
+STEP_KEY_MAP = {
+    "下单": "order",
+    "入库": "inbound",
+    "称重": "weigh",
+    "上架": "shelf",
+    "拆包": "unpack",
+    "出库通知": "outbound",
+    "集包": "bag",
+    "装车": "vehicle",
+    "发车": "dispatch",
+}
+
 
 @router.get("/route-nodes")
 async def get_route_nodes() -> dict:
@@ -646,7 +660,7 @@ async def pdd_route(data: dict[str, Any]) -> dict[str, Any]:
             result = rsp.json()
             return {"success": result.get("state", False) or result.get("code") == 200, "data": result}
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 
 
 @router.post("/batch")
@@ -679,11 +693,13 @@ async def pdd_batch(data: dict[str, Any]):
     warehouse_code = str(data.get("warehouse_code", "langfang_warehouse_1")).strip()
     bin_code = str(data.get("bin_code", "A1-1-2")).strip()
     route_ids = data.get("route_ids", [])
+    step_interval = float(data.get("step_interval", 0) or 0)
     if isinstance(route_ids, list):
         route_ids = sorted(route_ids, key=lambda r: ROUTE_ORDER.get(r, 999))
     config = PDDOrderConfig()
     save_state(TOOL_ID, {"batch_home_count": str(home_count), "batch_pickup_count": str(pickup_count),
-                          "batch_bag_size": str(bag_group_size), "batch_bin_code": bin_code})
+                          "batch_bag_size": str(bag_group_size), "batch_bin_code": bin_code,
+                          "batch_step_interval": str(step_interval)})
 
     if order_count < 1:
         return {"success": False, "message": "至少需要1个订单"}
@@ -718,10 +734,6 @@ async def pdd_batch(data: dict[str, Any]):
                 dt = oq["dt"]
                 template = home_body if oq["type"] == "home" else pickup_body
                 body = {**template, "deliveryType": dt}
-                # 如果商品表有数据，随机选商品替换模板
-                pick = random_pick_items(1)
-                if pick:
-                    body["items"] = pick
                 try:
                     resolved = generate_dynamic_fields(body)
                     async with PDDOrderClient() as client:
@@ -749,15 +761,22 @@ async def pdd_batch(data: dict[str, Any]):
             async for m in sse("step", {"step":"下单","status":"done","msg":f"完成 {len(success_orders)}/{order_count}"}): yield m
 
             # 辅助
-            async def run_step(name, fn):
-                async for m in sse("step",{"step":name,"status":"loading","msg":"执行中..."}): yield m
+            async def run_step(name, fn, *, must_succeed: bool = False):
+                key = STEP_KEY_MAP.get(name, name)
+                if step_interval > 0:
+                    async for m in sse("progress", {"msg": f"[{name}] 等待 {step_interval}s 后开始..."}): yield m
+                    await asyncio.sleep(step_interval)
+                async for m in sse("step",{"step":name,"key":key,"status":"loading","msg":"执行中..."}): yield m
                 ok=0; errs=[]
                 for o in success_orders:
                     rez,body=await fn(o)
                     if rez: ok+=1
                     else: errs.append({"mail_no":o["mail_no"],"body":body})
-                st="done" if ok else "fail"
-                async for m in sse("step",{"step":name,"status":st,"msg":f"{ok}/{len(success_orders)}","errors":errs if errs else None}): yield m
+                st="done" if ok == len(success_orders) else "fail"
+                async for m in sse("step",{"step":name,"key":key,"status":st,"msg":f"{ok}/{len(success_orders)}","errors":errs if errs else None}): yield m
+                if must_succeed and ok != len(success_orders):
+                    async for m in sse("error",{"message":f"{name}未全部成功，终止批量流程","errors":errs}): yield m
+                    yield {"__stop__": True}
 
             async def inbound_fn(o):
                 b={"trackingNumber":o["mail_no"]}
@@ -767,18 +786,29 @@ async def pdd_batch(data: dict[str, Any]):
                 wt = calculate_order_weight(o.get("items", []))
                 b={"trackcode":o["mail_no"],"length":20.5,"width":15,"height":10,"weight":wt}
                 r=await tms_post("/api/Equipment/SyncCrossLineData",b)
-                ok="成功" in str(r.get("result_msg","")); o["weigh"]=ok; return ok,b
+                ok=bool(r.get("state") or r.get("code")==200 or "成功" in str(r.get("result_msg","")))
+                o["weigh"]=ok
+                return ok,b
             async def shelf_fn(o):
                 b={"trackNumber":o["mail_no"],"putOnWarehouseCode":warehouse_code,"binCode":bin_code}
                 r=await tms_post("/api/Warehouse/PutPackageOrderOnShelf",b)
                 ok=r.get("state") or r.get("code")==200; o["shelf"]=ok; return ok,b
 
             if "inbound" in steps:
-                async for m in run_step("入库",inbound_fn): yield m
+                async for m in run_step("入库",inbound_fn, must_succeed=True):
+                    if isinstance(m, dict) and m.get("__stop__"):
+                        return
+                    yield m
             if "weigh" in steps:
-                async for m in run_step("称重",weigh_fn): yield m
+                async for m in run_step("称重",weigh_fn, must_succeed=True):
+                    if isinstance(m, dict) and m.get("__stop__"):
+                        return
+                    yield m
             if "shelf" in steps:
-                async for m in sse("step",{"step":"上架","status":"loading"}): yield m
+                if step_interval > 0:
+                    async for m in sse("progress", {"msg": f"[上架] 等待 {step_interval}s 后开始..."}): yield m
+                    await asyncio.sleep(step_interval)
+                async for m in sse("step",{"step":"上架","key":"shelf","status":"loading"}): yield m
                 home = [o for o in success_orders if o.get("delivery_type")=="homeDelivery"]
                 ok=0; errs=[]
                 for o in home:
@@ -787,12 +817,17 @@ async def pdd_batch(data: dict[str, Any]):
                     rez=r.get("state") or r.get("code")==200; o["shelf"]=rez
                     if rez: ok+=1
                     else: errs.append({"mail_no":o["mail_no"],"body":b})
-                st="done" if ok or not home else "fail"
-                async for m in sse("step",{"step":"上架","status":st,"msg":f"{ok}/{len(home)}跳过{len(success_orders)-len(home)}自提","errors":errs if errs else None}): yield m
-                if not ok and home: return
+                st="done" if ok == len(home) else "fail"
+                async for m in sse("step",{"step":"上架","key":"shelf","status":st,"msg":f"{ok}/{len(home)}跳过{len(success_orders)-len(home)}自提","errors":errs if errs else None}): yield m
+                if not ok and home:
+                    async for m in sse("error",{"message":"上架未全部成功，终止批量流程","errors":errs}): yield m
+                    return
 
             if "unpack" in steps:
-                async for m in sse("step",{"step":"拆包","status":"loading","msg":"执行中..."}): yield m
+                if step_interval > 0:
+                    async for m in sse("progress", {"msg": f"[拆包] 等待 {step_interval}s 后开始..."}): yield m
+                    await asyncio.sleep(step_interval)
+                async for m in sse("step",{"step":"拆包","key":"unpack","status":"loading","msg":"执行中..."}): yield m
                 home = [o for o in success_orders if o.get("delivery_type")=="homeDelivery"]
                 ok=0; errs=[]
                 for o in home:
@@ -802,14 +837,17 @@ async def pdd_batch(data: dict[str, Any]):
                     if o["unpack"]: ok+=1
                     else: errs.append({"mail_no":o["mail_no"],"body":ub})
                 st="done" if ok else "fail"
-                async for m in sse("step",{"step":"拆包","status":st,"msg":f"{ok}/{len(success_orders)}","errors":errs if errs else None}): yield m
+                async for m in sse("step",{"step":"拆包","key":"unpack","status":st,"msg":f"{ok}/{len(success_orders)}","errors":errs if errs else None}): yield m
                 if not ok:
                     async for m in sse("error",{"message":"拆包全部失败","errors":errs}): yield m
                     return
                 await asyncio.sleep(2)
 
             if "outbound" in steps:
-                async for m in sse("step",{"step":"出库通知","status":"loading","msg":"执行中..."}): yield m
+                if step_interval > 0:
+                    async for m in sse("progress", {"msg": f"[出库通知] 等待 {step_interval}s 后开始..."}): yield m
+                    await asyncio.sleep(step_interval)
+                async for m in sse("step",{"step":"出库通知","key":"outbound","status":"loading","msg":"执行中..."}): yield m
                 ok=0; errs=[]
                 for o in success_orders:
                     dt = o.get("delivery_type", delivery_type)
@@ -818,12 +856,14 @@ async def pdd_batch(data: dict[str, Any]):
                     ec = o["mail_no"][:2] if len(o["mail_no"]) >= 2 else "SF"
                     outbound_weight = int(calculate_order_weight(items) * 1000)
                     ob={"orderCode":o["order_code"],"buyerCode":o["buyer_code"],"providerCode":"KIMIGO_MN","consoWarehouseCode":"KIMIGO","consoType":"DIRECT_MAIL_DIRECT_ROAD","deliveryType":dt,"outboundType":"CONSO","logisticsOrderCodes":[o["pc_code"]],"orderSns":[o.get("trade_sn","")],"mailDetails":[{"expressCode":ec,"mailNo":o["mail_no"],"weight":outbound_weight,"consoWarehouseCode":"KIMIGO"}],"receiverDetail":receiver,"orderDetails":[{"orderSn":o.get("trade_sn",""),"logisticsOrderCode":o["pc_code"],"items":items}],"stationCode":"UB-A-0002"}
+                    print(f"[BATCH OUTBOUND] mail_no={o['mail_no']} weight={outbound_weight} body={ob}")
                     r2=await _pdd_post_raw(ob,"/api/pdd/callback/conso/outbound/notice")
+                    print(f"[BATCH OUTBOUND] mail_no={o['mail_no']} response={r2}")
                     o["outbound"]=r2.get("success")
                     if o["outbound"]: ok+=1
-                    else: errs.append({"mail_no":o["mail_no"],"body":ob})
+                    else: errs.append({"mail_no":o["mail_no"],"body":ob, "response": r2})
                 st="done" if ok else "fail"
-                async for m in sse("step",{"step":"出库通知","status":st,"msg":f"{ok}/{len(success_orders)}","errors":errs if errs else None}): yield m
+                async for m in sse("step",{"step":"出库通知","key":"outbound","status":st,"msg":f"{ok}/{len(success_orders)}","errors":errs if errs else None}): yield m
                 if not ok:
                     async for m in sse("error",{"message":"出库全部失败","errors":errs}): yield m
                     return
@@ -832,7 +872,10 @@ async def pdd_batch(data: dict[str, Any]):
             # 集包
             bags=[]
             if "bag" in steps:
-                async for m in sse("step",{"step":"集包","status":"loading","msg":"执行中..."}): yield m
+                if step_interval > 0:
+                    async for m in sse("progress", {"msg": f"[集包] 等待 {step_interval}s 后开始..."}): yield m
+                    await asyncio.sleep(step_interval)
+                async for m in sse("step",{"step":"集包","key":"bag","status":"loading","msg":"执行中..."}): yield m
                 # 按配送类型分组
                 home_orders = [o for o in success_orders if o.get("delivery_type") == "homeDelivery"]
                 pickup_orders = [o for o in success_orders if o.get("delivery_type") != "homeDelivery"]
@@ -859,9 +902,21 @@ async def pdd_batch(data: dict[str, Any]):
                             async for m in sse("progress",{"msg":f"跳过空包: {[o['mail_no'] for o in group]} (无合单号/尾程号)"}): yield m
                             continue
                         r=await tms_post("/api/CustomerOutbound/AddPddEmptyCustomerOutBound",{"outboundType":ob_type,"countryCode":"MN","customerCode":"Pdd-Mn","printCount":1,"outboundMode":1})
-                        cur.execute("SELECT id,outbound_number FROM customer_outbound ORDER BY id DESC LIMIT 1")
+                        if not (r.get("state") or r.get("code") == 200):
+                            async for m in sse("progress",{"msg":f"创建大包失败: {r}"}): yield m
+                            continue
+                        # 用创建前时间点过滤，避免查到旧包
+                        from datetime import timedelta
+                        create_before = (datetime.now() - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+                        await asyncio.sleep(1)
+                        cur.execute(
+                            "SELECT id,outbound_number FROM customer_outbound WHERE create_time > %s AND outbound_mode=1 ORDER BY id DESC LIMIT 1",
+                            (create_before,)
+                        )
                         row=cur.fetchone()
-                        if not row: continue
+                        if not row:
+                            async for m in sse("progress",{"msg":f"未查到新创建的大包 (after {create_before})"}): yield m
+                            continue
                         bag_id,bag_no=row[0],row[1]
                         for cno in combined_nos:
                             print(f"[BATCH BAG] {cno} 关联大包 {bag_no}(id={bag_id})")
@@ -869,34 +924,60 @@ async def pdd_batch(data: dict[str, Any]):
                         bags.append({"bag_no":bag_no,"count":len(group),"orders":[o["index"] for o in group],"combined_nos":combined_nos,"type":"上门" if ob_type==1 else "自提"})
                         print(f"[BATCH BAG] 包{bag_no} type={ob_type} orders={[o['mail_no'] for o in group]} combined={combined_nos}")
                         async for m in sse("progress",{"idx":gi,"total":total_groups,"bag_no":bag_no,"count":len(group)}): yield m
-                async for m in sse("step",{"step":"集包","status":"done","msg":f"完成 {len(bags)}个大包"}): yield m
+                async for m in sse("step",{"step":"集包","key":"bag","status":"done","msg":f"完成 {len(bags)}个大包"}): yield m
 
             # 装车
             vehicle=None
             if "vehicle" in steps and bags:
-                async for m in sse("step",{"step":"装车","status":"loading","msg":"执行中..."}): yield m
+                if step_interval > 0:
+                    async for m in sse("progress", {"msg": f"[装车] 等待 {step_interval}s 后开始..."}): yield m
+                    await asyncio.sleep(step_interval)
+                async for m in sse("step",{"step":"装车","key":"vehicle","status":"loading","msg":"执行中..."}): yield m
                 plate=f"MN{datetime.now().strftime('%y%m%d')}{int(_time.time()*1000)}"
-                await tms_post("/api/ProductPlanBillBasic/AddAndUpdateProductPlanBillBasicV2",{"countryCode":"MN","billLadingNo":plate,"remark":""})
+                r=await tms_post("/api/ProductPlanBillBasic/AddAndUpdateProductPlanBillBasicV2",{"countryCode":"MN","billLadingNo":plate,"remark":""})
+                if not (r.get("state") or r.get("code") == 200):
+                    async for m in sse("step",{"step":"装车","key":"vehicle","status":"fail","msg":"建车失败","errors":[{"result": r}]}): yield m
+                    async for m in sse("error",{"message":"装车-建车失败","errors":[{"result": r}]}): yield m
+                    return
+                create_before = (datetime.now() - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+                await asyncio.sleep(1)
                 cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
-                cur.execute("SELECT id FROM product_plan_bill_basic WHERE bill_lading_no=%s AND country_code='MN'",(plate,))
+                cur.execute(
+                    "SELECT id FROM product_plan_bill_basic WHERE create_time > %s AND bill_lading_no=%s AND country_code='MN' ORDER BY id DESC LIMIT 1",
+                    (create_before, plate)
+                )
                 row=cur.fetchone()
-                if row:
-                    vid=row[0]
-                    bag_nos=[b["bag_no"] for b in bags]
-                    await tms_post("/api/ProductPlanBillBasic/AddProductPlanBillBasicSend",{"productPlanBillBasicId":vid,"sortingAreaPackagingNumberList":bag_nos,"customerCode":"Pdd-Mn"})
+                if not row:
+                    async for m in sse("step",{"step":"装车","key":"vehicle","status":"fail","msg":"未查到车辆ID"}): yield m
+                    async for m in sse("error",{"message":f"装车-未查到车辆ID (after {create_before})"}): yield m
+                    return
+                vid=row[0]
+                bag_nos=[b["bag_no"] for b in bags]
+                r2=await tms_post("/api/ProductPlanBillBasic/AddProductPlanBillBasicSend",{"productPlanBillBasicId":vid,"sortingAreaPackagingNumberList":bag_nos,"customerCode":"Pdd-Mn"})
+                if r2.get("state") or r2.get("code") == 200:
                     vehicle={"plate":plate,"vehicle_id":vid,"bag_count":len(bags)}
-                async for m in sse("step",{"step":"装车","status":"done","msg":f"车牌 {plate}" if vehicle else "失败"}): yield m
+                    async for m in sse("step",{"step":"装车","key":"vehicle","status":"done","msg":f"车牌 {plate}"}): yield m
+                else:
+                    async for m in sse("step",{"step":"装车","key":"vehicle","status":"fail","msg":"包挂车失败","errors":[{"result": r2}]}): yield m
+                    async for m in sse("error",{"message":"装车-包挂车失败","errors":[{"result": r2}]}): yield m
+                    return
 
             # 发车
             if "dispatch" in steps and vehicle:
-                async for m in sse("step",{"step":"发车","status":"loading","msg":"执行中..."}): yield m
+                if step_interval > 0:
+                    async for m in sse("progress", {"msg": f"[发车] 等待 {step_interval}s 后开始..."}): yield m
+                    await asyncio.sleep(step_interval)
+                async for m in sse("step",{"step":"发车","key":"dispatch","status":"loading","msg":"执行中..."}): yield m
                 async with httpx.AsyncClient(timeout=config.timeout) as c:
                     await c.get(f"{config.tms_host}/api/ProductPlanBillBasic/UpdateProductPlanBillBasicSetOffCar",params={"id":vehicle["vehicle_id"],"customerId":"13"},headers={"Authorization":f"Bearer {token}"})
-                async for m in sse("step",{"step":"发车","status":"done","msg":"完成"}): yield m
+                async for m in sse("step",{"step":"发车","key":"dispatch","status":"done","msg":"完成"}): yield m
 
             # 轨迹推送
             if route_ids and vehicle:
-                async for m in sse("step",{"step":"轨迹","status":"loading","msg":f"推送{len(route_ids)}个节点..."}): yield m
+                if step_interval > 0:
+                    async for m in sse("progress", {"msg": f"[轨迹] 等待 {step_interval}s 后开始..."}): yield m
+                    await asyncio.sleep(step_interval)
+                async for m in sse("step",{"step":"轨迹","key":"route","status":"loading","msg":f"推送{len(route_ids)}个节点..."}): yield m
                 body = {"id":vehicle["vehicle_id"],"customerId":13,"isRemark":0,"remark":"","remarkEnglishName":"","remarkRussiaName":"","remarkKazakhstanName":"","billLadingNo":vehicle["plate"],"productPlanBillBasicId":vehicle["vehicle_id"]}
                 ok_count = 0
                 for rid in route_ids:
@@ -919,13 +1000,13 @@ async def pdd_batch(data: dict[str, Any]):
                     except Exception as ex:
                         async for m in sse("progress",{"msg":f"  {rid} {name} ERR: {ex}"}): yield m
                     await asyncio.sleep(1)
-                async for m in sse("step",{"step":"轨迹","status":"done","msg":f"完成 {ok_count}/{len(route_ids)}"}): yield m
+                async for m in sse("step",{"step":"轨迹","key":"route","status":"done","msg":f"完成 {ok_count}/{len(route_ids)}"}): yield m
 
             # 完成
             async for m in sse("done",{"orders":[{"index":o["index"],"mail_no":o["mail_no"],"ok":o["success"]} for o in orders],"bags":bags,"vehicle":vehicle}): yield m
 
         except Exception as e:
-            async for m in sse("error",{"message":str(e)}): yield m
+            async for m in sse("error", {"message": error_response(e).get("message", str(e)), "error_code": error_response(e).get("error_code", "UNKNOWN_ERROR")}): yield m
         finally:
             cur.close(); conn.close()
 
@@ -977,5 +1058,5 @@ async def _pdd_post(body: dict[str, Any], path: str, pp_code: str = "", step: st
                 resp["pp_code"] = pp_code
             return resp
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return error_response(e)
 

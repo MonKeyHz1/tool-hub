@@ -41,6 +41,7 @@ class PDDOrderTool(BaseTool):
         self,
         params: dict[str, Any],
         file_path: Path | None = None,
+        request_host: str = "",
     ) -> ToolResult:
         return ToolResult(
             success=True,
