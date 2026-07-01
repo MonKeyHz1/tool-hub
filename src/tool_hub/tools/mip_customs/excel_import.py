@@ -24,9 +24,14 @@ from .client import MIPAsyncClient
 from .exceptions import MIPAPIError, MIPAuthError, MIPDuplicateError, MIPValidationError
 from .import_config import ImportDefaults
 from .import_state import ImportState
+from .import_task import ImportTaskManager, ProgressCallback
 from .models import CustomsItem, GoodsItem, Order, Receiver, Sender
 
 logger = structlog.get_logger()
+
+
+async def _noop_progress(progress: int, total: int, message: str) -> None:
+    """默认进度回调（什么都不做）。"""
 
 
 # ======================================================================
@@ -446,6 +451,9 @@ class ExcelImporter:
         defaults: ImportDefaults | None = None,
         state: ImportState | None = None,
         use_create_api: bool = False,
+        progress_callback: ProgressCallback | None = None,
+        task_manager: ImportTaskManager | None = None,
+        task_id: str = "",
     ) -> None:
         """初始化导入器。
 
@@ -454,11 +462,17 @@ class ExcelImporter:
             defaults: 导入默认值配置。
             state: 导入状态存储（用于去重）。
             use_create_api: True=创建模式, False=更新模式。
+            progress_callback: 进度回调函数 (progress, total, message)。
+            task_manager: 任务管理器（用于检查取消状态）。
+            task_id: 当前任务 ID。
         """
         self.client = client
         self.defaults = defaults or ImportDefaults()
         self.state = state or ImportState()
         self.use_create_api = use_create_api
+        self.progress_callback = progress_callback or _noop_progress
+        self.task_manager = task_manager
+        self.task_id = task_id
         self._logger = logger.bind(component="ExcelImporter")
 
     async def _call_api_with_retry(self, item: CustomsItem) -> None:
@@ -519,6 +533,10 @@ class ExcelImporter:
             cancel_event: 取消事件（认证失败时触发）。
         """
         if cancel_event.is_set():
+            return
+
+        if self.task_manager and self.task_id and self.task_manager.is_cancelled(self.task_id):
+            cancel_event.set()
             return
 
         # 跳过已处理的记录
@@ -631,6 +649,9 @@ class ExcelImporter:
         try:
             from openpyxl import load_workbook
 
+            await self.progress_callback(0, 0, "正在解析 Excel...")
+            log.info("import_start")
+
             wb = load_workbook(path, data_only=True)
             ws = wb.active
             if ws is None:
@@ -649,18 +670,32 @@ class ExcelImporter:
             if tracking_filter:
                 groups = {t: r for t, r in groups.items() if t in tracking_filter}
             batch.processed_rows = sum(len(g) for g in groups.values())
-            log.info("groups_formed", group_count=len(groups))
+            total_groups = len(groups)
+            log.info("groups_formed", group_count=total_groups)
+
+            if total_groups == 0:
+                await self.progress_callback(0, 0, "没有需要处理的运单")
+                batch.completed_at = datetime.now(UTC)
+                return batch
+
+            await self.progress_callback(0, total_groups, "开始导入...")
 
             # 并发处理
             semaphore = asyncio.Semaphore(self._MAX_CONCURRENCY)
             cancel_event = asyncio.Event()
 
+            completed = 0
+
+            async def _process_with_progress(tracking: str, row_tuples: list[tuple[int, dict[str, Any]]]) -> None:
+                nonlocal completed
+                await self._process_group(tracking, row_tuples, path, batch, semaphore, cancel_event)
+                completed += 1
+                # 每处理 5% 或每个都回调，避免过于频繁
+                if total_groups <= 50 or completed % max(1, total_groups // 20) == 0 or completed == total_groups:
+                    await self.progress_callback(completed, total_groups, f"已处理 {completed}/{total_groups} 单")
+
             tasks = [
-                asyncio.create_task(
-                    self._process_group(
-                        tracking, row_tuples, path, batch, semaphore, cancel_event
-                    )
-                )
+                asyncio.create_task(_process_with_progress(tracking, row_tuples))
                 for tracking, row_tuples in groups.items()
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -670,7 +705,10 @@ class ExcelImporter:
                 if isinstance(result, MIPAuthError):
                     raise result
 
+            await self.progress_callback(total_groups, total_groups, "导入完成")
+
         except MIPAuthError:
+            await self.progress_callback(completed, total_groups, "认证失败")
             raise
         except MIPAPIError as exc:
             if getattr(exc, "status_code", None) in (503, 502, 504):

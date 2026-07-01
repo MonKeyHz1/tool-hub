@@ -244,6 +244,18 @@ async def download_mip_template():
     )
 
 
+@app.get("/api/mip-customs/status/{task_id}")
+async def get_mip_import_status(task_id: str) -> dict[str, Any]:
+    """获取 MIP 异步导入任务状态（用于前端轮询进度）。"""
+    from .tools.mip_customs.import_task import ImportTaskManager
+
+    manager = ImportTaskManager()
+    task = await manager.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"任务 '{task_id}' 不存在")
+    return task.to_dict()
+
+
 @app.get("/api/mip-customs/results")
 async def get_mip_results() -> dict[str, Any]:
     """获取最近一次导入的每行结果（从 SQLite 读取）。"""

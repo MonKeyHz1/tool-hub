@@ -18,6 +18,7 @@ from .config import MIPConfig
 from .excel_import import ExcelImporter
 from .import_config import ImportDefaults
 from .import_state import ImportState
+from .import_task import ImportTaskManager, ImportTaskStatus
 
 logger = structlog.get_logger()
 
@@ -82,15 +83,10 @@ class MIPCustomsTool(BaseTool):
         file_path: Path | None = None,
         request_host: str = "",
     ) -> ToolResult:
-        """执行 Excel 批量导入。
+        """启动异步 Excel 导入任务并立即返回 task_id。
 
-        Args:
-            params: 前端传入的参数（mode, sender_*, price 等）。
-            file_path: 上传的 Excel 文件路径。
-            request_host: 请求 Host，用于生成下载链接（当前未使用）。
-
-        Returns:
-            ToolResult 包含导入结果、成功/失败数量和错误详情。
+        前端拿到 task_id 后通过 /api/mip-customs/status/{task_id} 轮询进度，
+        避免大文件导入触发网关/前端超时。
         """
         if file_path is None:
             return ToolResult(
@@ -106,9 +102,39 @@ class MIPCustomsTool(BaseTool):
                 errors=[{"error_type": "FILE_NOT_FOUND", "message": f"文件不存在: {file_path}"}],
             )
 
+        manager = ImportTaskManager()
+        task = await manager.create_task()
+
+        # 启动后台任务
+        asyncio.create_task(self._run_import_task(task.task_id, params, file_path))
+
+        return ToolResult(
+            success=True,
+            message="导入任务已启动",
+            data={
+                "task_id": task.task_id,
+                "mode": "创建" if self._use_create else "更新",
+                "status_url": f"/api/mip-customs/status/{task.task_id}",
+            },
+        )
+
+    async def _run_import_task(
+        self,
+        task_id: str,
+        params: dict[str, Any],
+        file_path: Path,
+    ) -> None:
+        """实际执行导入的后台任务。"""
+        manager = ImportTaskManager()
         started_at = datetime.now(UTC).isoformat()
 
         try:
+            await manager.update_task(
+                task_id,
+                status=ImportTaskStatus.PARSING,
+                message="正在解析 Excel 文件",
+            )
+
             # 1. 构建导入默认值配置
             defaults = ImportDefaults(
                 sender_country_code=params.get("sender_country_code", "CN"),
@@ -140,6 +166,9 @@ class MIPCustomsTool(BaseTool):
                     defaults=defaults,
                     state=state,
                     use_create_api=self._use_create,
+                    progress_callback=manager.make_progress_callback(task_id),
+                    task_manager=manager,
+                    task_id=task_id,
                 )
 
                 batch = await importer.import_file(file_path)
@@ -154,16 +183,20 @@ class MIPCustomsTool(BaseTool):
             if batch.failure_count > 0:
                 message += f", {batch.failure_count} 失败"
 
-            return ToolResult(
-                success=success,
+            await manager.update_task(
+                task_id,
+                status=ImportTaskStatus.COMPLETED,
                 message=message,
-                data={
+                result={
+                    "success": success,
                     "source_file": batch.source_file,
                     "total_rows": batch.total_rows,
                     "processed_rows": batch.processed_rows,
                     "success_count": batch.success_count,
                     "failure_count": batch.failure_count,
                     "mode": "创建" if self._use_create else "更新",
+                    "started_at": started_at,
+                    "completed_at": completed_at,
                 },
                 errors=[
                     {
@@ -174,16 +207,13 @@ class MIPCustomsTool(BaseTool):
                     }
                     for e in batch.errors
                 ],
-                started_at=started_at,
-                completed_at=completed_at,
             )
 
         except Exception as exc:
-            self._logger.exception("tool_execution_failed", error=str(exc))
-            return ToolResult(
-                success=False,
+            self._logger.exception("tool_execution_failed", task_id=task_id, error=str(exc))
+            await manager.update_task(
+                task_id,
+                status=ImportTaskStatus.FAILED,
                 message=f"执行失败: {exc}",
                 errors=[{"error_type": "EXECUTION_ERROR", "message": str(exc)}],
-                started_at=started_at,
-                completed_at=datetime.now(UTC).isoformat(),
             )

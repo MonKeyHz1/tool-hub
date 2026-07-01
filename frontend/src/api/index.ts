@@ -321,6 +321,12 @@ export async function mipFetchResults() {
   return data
 }
 
+/** 获取 MIP 异步导入任务状态 */
+export async function mipGetTaskStatus(taskId: string) {
+  const { data } = await api.get(`/mip-customs/status/${taskId}`)
+  return data
+}
+
 /** 重试 MIP 导入失败行 */
 export async function mipRetryFailed(fileId: string, tokenEnv: string, useCreate: boolean) {
   const { data } = await api.post('/mip-customs/retry', {

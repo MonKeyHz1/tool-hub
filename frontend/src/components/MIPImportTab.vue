@@ -2,8 +2,8 @@
 /**
  * MIPImportTab - MIP 导入 Tab（上传/执行/结果/重试）。
  */
-import { ref } from 'vue'
-import { uploadFile, executeTool, mipFetchResults, mipRetryFailed } from '../api'
+import { onUnmounted, ref } from 'vue'
+import { uploadFile, executeTool, mipFetchResults, mipRetryFailed, mipGetTaskStatus } from '../api'
 
 const props = defineProps<{
   toolId: string
@@ -47,17 +47,77 @@ async function onUpload() {
   }
 }
 
+// --- 异步任务轮询 ---
+const taskId = ref('')
+const taskStatus = ref('')
+const taskProgress = ref(0)
+const taskTotal = ref(0)
+const taskMessage = ref('')
+let pollTimer: number | null = null
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    window.clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+onUnmounted(stopPolling)
+
+async function pollTaskStatus(currentTaskId: string) {
+  try {
+    const s = await mipGetTaskStatus(currentTaskId)
+    taskStatus.value = s.status
+    taskProgress.value = s.progress || 0
+    taskTotal.value = s.total || 0
+    taskMessage.value = s.message || ''
+
+    if (s.status === 'completed' || s.status === 'failed' || s.status === 'cancelled') {
+      stopPolling()
+      executing.value = false
+      execResult.value = {
+        success: s.status === 'completed' && s.result?.success,
+        message: s.message,
+        data: s.result || {},
+        errors: s.errors || [],
+      }
+      if (s.status === 'failed') {
+        execError.value = s.message || '导入失败'
+      }
+      onFetchResults()
+    }
+  } catch (e: any) {
+    execError.value = e.response?.data?.detail || e.message || '查询任务状态失败'
+    stopPolling()
+    executing.value = false
+  }
+}
+
 async function onExecute() {
   if (!fileId.value) return
   executing.value = true
   execError.value = ''
   execResult.value = null
+  stopPolling()
+  taskStatus.value = ''
+  taskProgress.value = 0
+  taskTotal.value = 0
+  taskMessage.value = ''
+
   try {
     const r = await executeTool(props.toolId, { token_env: tokenEnv.value }, fileId.value)
-    execResult.value = r
+    if (r.success && r.data?.task_id) {
+      taskId.value = r.data.task_id
+      await pollTaskStatus(taskId.value)
+      if (taskStatus.value !== 'completed' && taskStatus.value !== 'failed' && taskStatus.value !== 'cancelled') {
+        pollTimer = window.setInterval(() => pollTaskStatus(taskId.value), 1500)
+      }
+    } else {
+      execError.value = r.message || '启动任务失败'
+      executing.value = false
+    }
   } catch (e: any) {
     execError.value = e.response?.data?.detail || e.message || '执行失败'
-  } finally {
     executing.value = false
   }
 }
@@ -134,6 +194,18 @@ async function onRetryAll() {
 
     <div v-if="execError" class="err">{{ execError }}</div>
 
+    <!-- 任务进度 -->
+    <div v-if="executing || taskStatus" class="progress-wrap">
+      <div class="progress-bar">
+        <div class="progress-fill" :style="{ width: taskTotal ? `${(taskProgress / taskTotal) * 100}%` : '0%' }"></div>
+      </div>
+      <div class="progress-text">
+        <span v-if="taskStatus">{{ taskStatus }} — </span>
+        <span>{{ taskMessage }}</span>
+        <span v-if="taskTotal"> ({{ taskProgress }}/{{ taskTotal }})</span>
+      </div>
+    </div>
+
     <!-- 执行摘要 -->
     <div v-if="execResult" class="summary">
       <span :class="execResult.success ? 'ok' : 'fail'">
@@ -196,6 +268,10 @@ async function onRetryAll() {
 .fail { color: #c62828; font-size: 13px; }
 .err { padding: 8px 12px; background: #ffebee; color: #c62828; border-radius: 4px; font-size: 13px; margin: 8px 0; }
 .summary { padding: 10px 12px; background: #f5f5f5; border-radius: 4px; display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+.progress-wrap { margin: 10px 0; }
+.progress-bar { width: 100%; height: 10px; background: #e0e0e0; border-radius: 5px; overflow: hidden; }
+.progress-fill { height: 100%; background: #1976d2; transition: width 0.3s ease; }
+.progress-text { font-size: 12px; color: #555; margin-top: 4px; }
 .table-wrap { margin-top: 12px; max-height: 500px; overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th, td { padding: 5px 8px; border-bottom: 1px solid #e0e0e0; text-align: left; }
