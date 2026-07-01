@@ -115,9 +115,15 @@ async def pdd_create_order(request: PDDOrderRequest) -> dict[str, Any]:
             "sent_trade_order_sn": (resolved.get("paymentDetail") or {}).get("tradeOrderSn", ""),
             "sent_mail_no": (resolved.get("mailDetails") or [{}])[0].get("mailNo", ""),
         }
+    except httpx.TimeoutException as e:
+        logger.error("pdd_create_order_timeout", error=str(e), delivery_type=request.delivery_type)
+        return {"success": False, "error_code": "TIMEOUT_ERROR", "message": f"请求PDD网关超时: {e}"}
+    except httpx.HTTPError as e:
+        logger.error("pdd_create_order_http_error", error=str(e), error_type=type(e).__name__, delivery_type=request.delivery_type)
+        return {"success": False, "error_code": "NETWORK_ERROR", "message": f"网络错误: {type(e).__name__}: {e}"}
     except Exception as e:
-        logger.error("pdd_create_order_error", error=str(e))
-        return error_response(e)
+        logger.error("pdd_create_order_error", error=str(e), error_type=type(e).__name__)
+        return {"success": False, "error_code": "UNKNOWN_ERROR", "message": f"下单异常: {type(e).__name__}: {e}"}
 
 
 # ================================================================

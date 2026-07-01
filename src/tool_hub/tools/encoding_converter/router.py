@@ -20,7 +20,7 @@ from ..common_errors import error_response
 
 logger = structlog.get_logger()
 
-router = APIRouter(prefix="/encoding-converter", tags=["encoding-converter"])
+router = APIRouter(prefix="/api/encoding-converter", tags=["encoding-converter"])
 
 
 @router.post("/base64-to-pdf")

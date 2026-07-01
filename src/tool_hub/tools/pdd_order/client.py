@@ -37,11 +37,18 @@ class PDDOrderClient:
         print(f"[PDD STEP3] sign={sign} body_len={len(body_json)}")
         headers = {"Content-Type": "application/json;charset=UTF-8"}
         print("[PDD STEP4] post")
-        resp = await self._client.post(
-            "/api/pdd/callback/conso/order/create",
-            content=body_json.encode("utf-8"),
-            headers=headers,
-        )
+        try:
+            resp = await self._client.post(
+                "/api/pdd/callback/conso/order/create",
+                content=body_json.encode("utf-8"),
+                headers=headers,
+            )
+        except httpx.TimeoutException as e:
+            print(f"[PDD STEP5] TIMEOUT after {self._client.timeout.read}s")
+            raise
+        except httpx.HTTPError as e:
+            print(f"[PDD STEP5] HTTP_ERROR {type(e).__name__}: {e}")
+            raise
         print(f"[PDD STEP5] resp={resp.status_code}")
         result = resp.json()
         print(f"[PDD STEP6] result={result}")
