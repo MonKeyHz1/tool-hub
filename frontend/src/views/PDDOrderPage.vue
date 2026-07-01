@@ -248,16 +248,42 @@ async function onBatch(){
       for(const p of parts){const lines=p.split('\n');let event='',data=''
         for(const l of lines){if(l.startsWith('event:'))event=l.slice(6).trim();else if(l.startsWith('data:'))data=l.slice(5).trim()}
         if(!event||!data)continue
-        try{const d=JSON.parse(data)
-          if(event==='step'){batchStepStates.value[d.key||d.step]=d.status;batchProgress.value.push(`${d.status==='done'?'✓':d.status==='fail'?'X':'O'} ${d.step}: ${d.msg}`);if(d.errors)for(const e of d.errors)batchProgress.value.push(` ${e.mail_no}: ${JSON.stringify(e.body)}`)}}
-          else if(event==='progress'){
+        try{
+          const d=JSON.parse(data)
+          if(event==='step'){
+            batchStepStates.value[d.key||d.step]=d.status
+            batchProgress.value.push(`${d.status==='done'?'✓':d.status==='fail'?'X':'O'} ${d.step}: ${d.msg}`)
+            if(d.errors){
+              for(const e of d.errors){
+                batchProgress.value.push(` ${e.mail_no}: ${JSON.stringify(e.body)}`)
+              }
+            }
+          }else if(event==='progress'){
             if(d.msg){ batchProgress.value.push(d.msg) }
             else if(d.bag_no){ batchProgress.value.push(`包${d.idx}/${d.total}: ${d.bag_no} (${d.count||0}单)`) }
             else{ batchProgress.value.push(`${d.ok?'OK':'FAIL'} 下单${d.idx}/${d.total}: ${d.type==='pickup'?'[自提]':'[上门]'} ${d.mail_no}`) }
+          }else if(event==='done'){
+            batchOrders.value=d.orders||[]
+            batchResult.value={data:{orders:d.orders,bags:d.bags,vehicle:d.vehicle}}
+            batchProgress.value.push('done')
+          }else if(event==='error'){
+            batchError.value=d.message
+            batchProgress.value.push(`ERROR: ${d.message}`)
+            if(d.errors){
+              for(const e of d.errors){
+                batchProgress.value.push(` ${e.mail_no}: ${JSON.stringify(e.body)}`)
+              }
+            }
           }
-          else if(event==='done'){batchOrders.value=d.orders||[];batchResult.value={data:{orders:d.orders,bags:d.bags,vehicle:d.vehicle}};batchProgress.value.push('done')}
-          else if(event==='error'){batchError.value=d.message;batchProgress.value.push(`ERROR: ${d.message}`);if(d.errors)for(const e of d.errors)batchProgress.value.push(` ${e.mail_no}: ${JSON.stringify(e.body)}`)}
-        }catch{}}}}catch(e:any){batchError.value=e.message||'fail'}finally{batchLoading.value=false}}
+        }catch{}
+      }
+    }
+  }catch(e:any){
+    batchError.value=e.message||'fail'
+  }finally{
+    batchLoading.value=false
+  }
+}
 </script>
 
 <template>
