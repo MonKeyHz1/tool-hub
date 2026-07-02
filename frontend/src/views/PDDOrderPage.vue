@@ -242,6 +242,14 @@ async function onBatch(){
     const body=JSON.parse(orderJson.value)
     const resp=await fetch('/api/pdd-order/batch',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({home_count:+batchOrderCount.value,pickup_count:+batchPickupCount.value,bag_group_size:+batchBagSize.value,steps:batchSteps.value,delivery_type:deliveryType.value,token:tmsToken.value,warehouse_code:batchWarehouseCode.value,bin_code:batchBinCode.value,step_interval:parseFloat(batchStepInterval.value||'0'),route_ids:[...batchRouteIds.value,...(batchFailNodeId.value?[batchFailNodeId.value]:[])],order_body:JSON.parse(orderJson.value)})})
+    const contentType = resp.headers.get('content-type') || ''
+    if (!contentType.includes('text/event-stream')) {
+      const text = await resp.text()
+      let msg = text
+      try { const j = JSON.parse(text); msg = j.message || text } catch {}
+      batchError.value = msg || '批量请求失败'
+      return
+    }
     const reader=resp.body!.getReader();const decoder=new TextDecoder();let buf=''
     while(true){const{value,done}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true})
       const parts=buf.split('\n\n');buf=parts.pop()||''
