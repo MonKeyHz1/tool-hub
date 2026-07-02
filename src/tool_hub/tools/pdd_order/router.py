@@ -669,9 +669,50 @@ async def pdd_route(data: dict[str, Any]) -> dict[str, Any]:
         return error_response(e)
 
 
+async def _ensure_tms_token(token: str | None = None) -> tuple[bool, str, str]:
+    """确保有有效的 TMS token。
+
+    如果传入 token 有效则直接返回；否则尝试用保存的账号密码自动登录。
+    返回 (success, token, message)。
+    """
+    if token and token.strip():
+        return True, token.strip(), ""
+
+    state = get_state(TOOL_ID)
+    saved_token = state.get("tms_token", "")
+    if saved_token:
+        return True, saved_token, ""
+
+    tms_user = state.get("tms_job_number", "")
+    tms_pass = state.get("tms_password", "")
+    if not tms_user or not tms_pass:
+        config = PDDOrderConfig()
+        tms_user = tms_user or config.tms_user
+        tms_pass = tms_pass or config.tms_password
+
+    if not tms_user or not tms_pass:
+        return False, "", "请先在揽收入库Tab登录TMS（未配置自动登录账号）"
+
+    try:
+        async with httpx.AsyncClient(timeout=PDDOrderConfig().timeout) as client:
+            rsp = await client.post(
+                f"{PDDOrderConfig().tms_host}/api/Login/NewLogin",
+                json={"jobNumber": tms_user, "password": tms_pass},
+                headers={"Content-Type": "application/json"},
+            )
+            data_rsp = rsp.json()
+            if data_rsp.get("state") and data_rsp.get("data"):
+                new_token = data_rsp["data"]
+                save_state(TOOL_ID, {"tms_token": new_token})
+                return True, new_token, ""
+            return False, "", f"自动登录TMS失败: {data_rsp}"
+    except Exception as e:
+        return False, "", f"自动登录TMS异常: {e}"
+
+
 @router.post("/batch")
 async def pdd_batch(data: dict[str, Any]):
-    """批量创建订单并推送全流程（SSE 流式返回进度）。"""
+    """批量创建订单并推送全流程（SSE 流式返回进度）。-"""
     import asyncio, time as _time, json as _json
     from fastapi.responses import StreamingResponse
 
@@ -680,7 +721,7 @@ async def pdd_batch(data: dict[str, Any]):
     order_count = home_count + pickup_count
     bag_group_size = int(data.get("bag_group_size", 1))
     steps = data.get("steps", [])
-    token = str(data.get("token", "")).strip()
+    token_input = str(data.get("token", "")).strip()
     order_body = data.get("order_body", {})
     state = get_state(TOOL_ID)
     try:
@@ -709,8 +750,10 @@ async def pdd_batch(data: dict[str, Any]):
 
     if order_count < 1:
         return {"success": False, "message": "至少需要1个订单"}
-    if not token or not token.strip():
-        return {"success": False, "message": "请先在揽收入库Tab登录TMS"}
+
+    login_ok, tms_token, login_msg = await _ensure_tms_token(token_input)
+    if not login_ok:
+        return {"success": False, "message": login_msg}
 
     # 生成订单队列：[{type:'home', dt:'homeDelivery'}, ...]
     order_queue = [{"type":"home","dt":"homeDelivery"}] * home_count + [{"type":"pickup","dt":"selfPickup"}] * pickup_count
@@ -730,7 +773,7 @@ async def pdd_batch(data: dict[str, Any]):
         async def tms_post(p: str, b: dict) -> dict:
             async with httpx.AsyncClient(timeout=config.timeout) as c:
                 r = await c.post(f"{config.tms_host}{p}", json=b,
-                    headers={"Content-Type":"application/json","Authorization":f"Bearer {token}"})
+                    headers={"Content-Type":"application/json","Authorization":f"Bearer {tms_token}"})
                 return r.json()
 
         try:
