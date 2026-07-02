@@ -49,8 +49,16 @@ class PDDOrderClient:
         except httpx.HTTPError as e:
             print(f"[PDD STEP5] HTTP_ERROR {type(e).__name__}: {e}")
             raise
-        print(f"[PDD STEP5] resp={resp.status_code}")
-        result = resp.json()
+        print(f"[PDD STEP5] resp={resp.status_code} content_len={len(resp.content)}")
+        raw_text = resp.text
+        if not raw_text:
+            print("[PDD STEP6] EMPTY_RESPONSE")
+            raise ValueError(f"PDD gateway returned empty response (status={resp.status_code})")
+        try:
+            result = resp.json()
+        except Exception as e:
+            print(f"[PDD STEP6] JSON_PARSE_ERROR text={raw_text[:500]}")
+            raise
         print(f"[PDD STEP6] result={result}")
         return result
 
