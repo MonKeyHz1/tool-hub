@@ -784,6 +784,7 @@ async def pdd_batch(data: dict[str, Any]):
                 template = home_body if oq["type"] == "home" else pickup_body
                 body = {**template, "deliveryType": dt}
                 try:
+                    async for m in sse("progress", {"msg": f"开始下单 {i+1}/{order_count} [{oq['type']}]..."}): yield m
                     resolved = generate_dynamic_fields(body)
                     async with PDDOrderClient() as client:
                         result = await client.create_order(resolved)
@@ -792,6 +793,7 @@ async def pdd_batch(data: dict[str, Any]):
                     resolved = generate_dynamic_fields(body)
                     ok = False
                     result = {"success": False, "message": str(ex)}
+                    async for m in sse("progress", {"msg": f"下单 {i+1}/{order_count} 异常: {ex}"}): yield m
                 mail_no = (resolved.get("mailDetails") or [{}])[0].get("mailNo", "")
                 pc_code = resolved.get("logisticsOrderCode", "")
                 pp_code = pc_code.replace("PC", "PP", 1)
