@@ -859,7 +859,7 @@ async def pdd_batch(data: dict[str, Any]):
                 if step_interval > 0:
                     async for m in sse("progress", {"msg": f"[上架] 等待 {step_interval}s 后开始..."}): yield m
                     await asyncio.sleep(step_interval)
-                async for m in sse("step",{"step":"上架","key":"shelf","status":"loading"}): yield m
+                async for m in sse("step",{"step":"上架","key":"shelf","status":"loading","msg":"执行中..."}): yield m
                 home = [o for o in success_orders if o.get("delivery_type")=="homeDelivery"]
                 ok=0; errs=[]
                 for o in home:
