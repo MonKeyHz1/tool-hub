@@ -987,21 +987,31 @@ async def pdd_batch(data: dict[str, Any]):
                 async for m in sse("step",{"step":"装车","key":"vehicle","status":"loading","msg":"执行中..."}): yield m
                 plate=f"MN{datetime.now().strftime('%y%m%d')}{int(_time.time()*1000)}"
                 r=await tms_post("/api/ProductPlanBillBasic/AddAndUpdateProductPlanBillBasicV2",{"countryCode":"MN","billLadingNo":plate,"remark":""})
+                print(f"[VEHICLE CREATE] plate={plate} response={r}")
                 if not (r.get("state") or r.get("code") == 200):
                     async for m in sse("step",{"step":"装车","key":"vehicle","status":"fail","msg":"建车失败","errors":[{"result": r}]}): yield m
                     async for m in sse("error",{"message":"装车-建车失败","errors":[{"result": r}]}): yield m
                     return
                 create_before = (datetime.now() - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
                 cur.execute(
-                    "SELECT id FROM product_plan_bill_basic WHERE create_time > %s AND bill_lading_no=%s AND country_code='MN' ORDER BY id DESC LIMIT 1",
+                    "SELECT id, create_time FROM product_plan_bill_basic WHERE create_time > %s AND bill_lading_no=%s AND country_code='MN' ORDER BY id DESC LIMIT 1",
                     (create_before, plate)
                 )
                 row=cur.fetchone()
+                print(f"[VEHICLE QUERY] plate={plate} create_before={create_before} row={row}")
+                if not row:
+                    # 二次查询：放宽条件只按车牌查
+                    cur.execute(
+                        "SELECT id, create_time FROM product_plan_bill_basic WHERE bill_lading_no=%s AND country_code='MN' ORDER BY id DESC LIMIT 1",
+                        (plate,)
+                    )
+                    row=cur.fetchone()
+                    print(f"[VEHICLE QUERY2] plate={plate} row={row}")
                 if not row:
                     async for m in sse("step",{"step":"装车","key":"vehicle","status":"fail","msg":"未查到车辆ID"}): yield m
-                    async for m in sse("error",{"message":f"装车-未查到车辆ID (after {create_before})"}): yield m
+                    async for m in sse("error",{"message":f"装车-未查到车辆ID (after {create_before}, plate={plate})"}): yield m
                     return
                 vid=row[0]
                 bag_nos=[b["bag_no"] for b in bags]
