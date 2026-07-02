@@ -793,7 +793,8 @@ async def pdd_batch(data: dict[str, Any]):
                     resolved = generate_dynamic_fields(body)
                     ok = False
                     result = {"success": False, "message": str(ex)}
-                    async for m in sse("progress", {"msg": f"下单 {i+1}/{order_count} 异常: {ex}"}): yield m
+                    err_detail = f"{type(ex).__name__}: {ex} args={getattr(ex, 'args', [])}"
+                    async for m in sse("progress", {"msg": f"下单 {i+1}/{order_count} 异常: {err_detail}"}): yield m
                 mail_no = (resolved.get("mailDetails") or [{}])[0].get("mailNo", "")
                 pc_code = resolved.get("logisticsOrderCode", "")
                 pp_code = pc_code.replace("PC", "PP", 1)
