@@ -798,7 +798,7 @@ async def pdd_batch(data: dict[str, Any]):
                 mail_no = (resolved.get("mailDetails") or [{}])[0].get("mailNo", "")
                 pc_code = resolved.get("logisticsOrderCode", "")
                 pp_code = pc_code.replace("PC", "PP", 1)
-                order_code = pp_code
+                order_code = pp_code if dt == "homeDelivery" else pc_code
                 buyer_code = resolved.get("buyerCode", "")
                 trade_sn = (resolved.get("paymentDetail") or {}).get("tradeOrderSn", "")
                 o = {"index": i+1, "success": ok, "mail_no": mail_no, "pc_code": pc_code,
@@ -907,7 +907,7 @@ async def pdd_batch(data: dict[str, Any]):
                     receiver = o.get("buyer_detail", order_body.get("buyerDetail", {}))
                     ec = o["mail_no"][:2] if len(o["mail_no"]) >= 2 else "SF"
                     outbound_weight = int(calculate_order_weight(items) * 1000)
-                    ob={"orderCode":o["order_code"],"buyerCode":o["buyer_code"],"providerCode":"KIMIGO_MN","consoWarehouseCode":"KIMIGO","consoType":"DIRECT_MAIL_DIRECT_ROAD","deliveryType":dt,"outboundType":"CONSO","logisticsOrderCodes":[o["pc_code"]],"orderSns":[o.get("trade_sn","")],"mailDetails":[{"expressCode":ec,"mailNo":o["mail_no"],"weight":outbound_weight,"consoWarehouseCode":"KIMIGO"}],"receiverDetail":receiver,"orderDetails":[{"orderSn":o.get("trade_sn",""),"logisticsOrderCode":o["pc_code"],"items":items}],"stationCode":"UB-A-0002"}
+                    ob={"orderCode":o["order_code"],"buyerCode":o["buyer_code"],"providerCode":"KIMIGO_MN","consoWarehouseCode":"KIMIGO","consoType":"DIRECT_MAIL_DIRECT_ROAD","deliveryType":dt,"outboundType":"CONSO","logisticsOrderCodes":[o["pp_code"]],"orderSns":[o.get("trade_sn","")],"mailDetails":[{"expressCode":ec,"mailNo":o["mail_no"],"weight":outbound_weight,"consoWarehouseCode":"KIMIGO"}],"receiverDetail":receiver,"orderDetails":[{"orderSn":o.get("trade_sn",""),"logisticsOrderCode":o["pp_code"],"items":items}],"stationCode":"UB-A-0002"}
                     print(f"[BATCH OUTBOUND] mail_no={o['mail_no']} weight={outbound_weight} body={ob}")
                     r2=await _pdd_post_raw(ob,"/api/pdd/callback/conso/outbound/notice")
                     print(f"[BATCH OUTBOUND] mail_no={o['mail_no']} response={r2}")
