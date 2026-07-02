@@ -1071,14 +1071,24 @@ async def _pdd_post_raw(body: dict[str, Any], path: str) -> dict[str, Any]:
     sign = sign_pdd(body, config.client_secret)
     body_with_sign = {**body, "sign": sign}
     body_json = json.dumps(body_with_sign, ensure_ascii=False, separators=(",", ":"))
-    async with httpx.AsyncClient(timeout=config.timeout) as client:
-        rsp = await client.post(
-            f"{config.gateway_url}{path}",
-            content=body_json.encode("utf-8"),
-            headers={"Content-Type": "application/json;charset=UTF-8"},
-        )
-        result = rsp.json()
-        return {"success": result.get("success", False), "data": result}
+    try:
+        async with httpx.AsyncClient(timeout=config.timeout) as client:
+            rsp = await client.post(
+                f"{config.gateway_url}{path}",
+                content=body_json.encode("utf-8"),
+                headers={"Content-Type": "application/json;charset=UTF-8"},
+            )
+            result = rsp.json()
+            return {"success": result.get("success", False), "data": result}
+    except httpx.TimeoutException as e:
+        logger.error("_pdd_post_raw_timeout", path=path, error=str(e))
+        return {"success": False, "error_code": "TIMEOUT_ERROR", "message": f"请求PDD网关超时: {e}"}
+    except httpx.HTTPError as e:
+        logger.error("_pdd_post_raw_http_error", path=path, error_type=type(e).__name__, error=str(e))
+        return {"success": False, "error_code": "NETWORK_ERROR", "message": f"网络错误: {type(e).__name__}: {e}"}
+    except Exception as e:
+        logger.error("_pdd_post_raw_error", path=path, error_type=type(e).__name__, error=str(e))
+        return {"success": False, "error_code": "UNKNOWN_ERROR", "message": f"请求异常: {type(e).__name__}: {e}"}
 
 
 async def _pdd_post(body: dict[str, Any], path: str, pp_code: str = "", step: str = "", tracking: str = "") -> dict[str, Any]:
