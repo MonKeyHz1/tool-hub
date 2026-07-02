@@ -798,7 +798,7 @@ async def pdd_batch(data: dict[str, Any]):
                 mail_no = (resolved.get("mailDetails") or [{}])[0].get("mailNo", "")
                 pc_code = resolved.get("logisticsOrderCode", "")
                 pp_code = pc_code.replace("PC", "PP", 1)
-                order_code = pp_code if delivery_type == "homeDelivery" else pc_code
+                order_code = pp_code if dt == "homeDelivery" else pc_code
                 buyer_code = resolved.get("buyerCode", "")
                 trade_sn = (resolved.get("paymentDetail") or {}).get("tradeOrderSn", "")
                 o = {"index": i+1, "success": ok, "mail_no": mail_no, "pc_code": pc_code,
